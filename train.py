@@ -5,7 +5,7 @@ GPU_ids = [0]
 #GPU_ids = [0,1]
 
 import torch 
-from Models.SETR.transformer_seg import SETRModel
+from Models.transformer_JSCC import JSCCModel
 import torchvision
 import torch
 import torch.nn as nn 
