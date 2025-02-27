@@ -12,10 +12,11 @@ python train.py
 
 - Select different **patch sizes** and their **positional encoding settings** for different data resolutions.
 - Select different `args.tcn` for different **bandwidth ratios**.
+- Select different feedback-block numbers for different settings.
 
 ## Block Selection
 
-- For **CIFAR-10** and **CelebA**, this **Seq-to-Seq architecture** performs well, especially under lower complexity.
+- For **CIFAR-10** and **CelebA**, this **Seq-to-Seq architecture** performs well with best performance, especially under lower complexity.
 - Replacing the **learnable positional encoding** with **conditional positional encoding** benefits **resolution-adaptive design**.
 
 ## Some Tips
