@@ -16,8 +16,10 @@ python train.py
 
 ## Block Selection
 
-- For **CIFAR-10** and **CelebA**, this **Seq-to-Seq architecture** performs well with best performance, especially under lower complexity.
-- Replacing the **learnable positional encoding** with **conditional positional encoding** benefits **resolution-adaptive design**.
+- For **CIFAR-10** (4x4) and **CelebA** (8x8), this **Seq-to-Seq architecture** performs well with best performance, especially under lower complexity.
+- Replacing the **learnable positional encoding** with **conditional positional encoding** benefits **resolution-adaptive design**. 
+  (https://arxiv.org/abs/2102.10882)
+- If the GPU is not allowed, another simple way is to train across 128x128 patches, and reconstruct image with patch-wise and then compute PSNR. (Still can match the similar SOTA performance.)
 
 ## Some Tips
 
