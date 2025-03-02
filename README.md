@@ -19,12 +19,13 @@ python train.py
 - For **CIFAR-10** (4x4) and **CelebA** (8x8), this **Seq-to-Seq architecture** performs well with best performance, especially under lower complexity.
 - Replacing the **learnable positional encoding** with **conditional positional encoding** benefits **resolution-adaptive design**. 
   (https://arxiv.org/abs/2102.10882)
-- If the GPU is not allowed, another simple way is to train across 128x128 patches, and reconstruct image with patch-wise and then compute PSNR. (Still can match the similar SOTA performance.)
 
 ## Some Tips
 
 - For **large-resolution settings**, using an **alternative SWIN block** can speed up training.  
   _(Will update for convenient usage when available.)_
+- If the GPU memoary is not allowed, another simple way is to train across 128x128 patches, and reconstruct image in patch-wise and then compute PSNR. (Still can match the similar SOTA performance.)
+
 
 > **Note**: The code is currently uncleaned. I will clean it and make it more user-friendly when I have time.  
 
