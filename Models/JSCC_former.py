@@ -31,7 +31,7 @@ class Channel(nn.Module):
 
         ##awgn:
         noise_stddev=np.sqrt((10**(-input_snr/10))/2)
-        noise_stddev_board=torch.from_numpy(noise_stddev).repeat(1,z_in_norm.shape[1]).cuda()
+        noise_stddev_board=torch.from_numpy(noise_stddev).view(batch_size,1).repeat(1,z_in_norm.shape[1]).cuda()
         mean=torch.zeros_like(noise_stddev_board).cuda()
         #compute noise:
         noise_real=Variable(torch.normal(mean=mean,std=noise_stddev_board).cuda())
@@ -44,7 +44,7 @@ class Channel(nn.Module):
         out=torch.cat((real_out,img_out),dim=1)
         channel_out=out.view(in_shape).float()
         return channel_out
-
+    
 class Encoder2D(nn.Module):
     def __init__(self, config: TransConfig, tcn,iteration):
         super().__init__()
@@ -98,7 +98,6 @@ class Decoder2D_trans(nn.Module):
         #self.final_dense = nn.Linear(config.hidden_size, 192)
         self.final_dense = nn.Linear(config.hidden_size, 48)
         #self.final_dense =Siam_linear(config,config.hidden_size,48)
-
         ##linear:x hidden-> 8*8*hidden/16/16
         self.patch_size = config.patch_size
 
@@ -136,7 +135,7 @@ class FL_De_Module(nn.Module):
         return out
 
 
-class JSCCModel(nn.Module):
+class JSCCformerModel(nn.Module):
     def __init__(self, patch_size=(32, 32), 
                         in_channels=3, 
                         out_channels=1, 
@@ -166,19 +165,21 @@ class JSCCModel(nn.Module):
         self.tcn=tcn
         self.fb_num=tcn
         self.iteration=iteration
+        self.test_encoding_time_flag=0 #set this into 1 to early return to check the encoding time.
 
     def transmit_feature(self,feature,channel_snr):
-        #feature_ave=torch.zeros_like(feature).float().cuda()
-        #for i in range (1):
-        channel_out=self.channel(feature,channel_snr)
-        #feature_ave=feature_ave+channel_out
-        #feature_out=feature_ave/1
-        return channel_out
+        feature_ave=torch.zeros_like(feature).float().cuda()
+        for i in range (1):
+            channel_out=self.channel(feature,channel_snr)
+            feature_ave=feature_ave+channel_out
+        feature_out=feature_ave/1
+        return feature_out
+
 
     def forward(self, x,input_snr,fb_snr):
         batch_size=x.shape[0]
         if input_snr=='random':
-            snr=np.random.rand(batch_size,)*(10+2)-2
+            snr=np.random.rand(batch_size,)*(15+2)-2
         else:
             snr=np.broadcast_to(input_snr,(batch_size,1))
         if fb_snr=='perfect':
@@ -186,7 +187,7 @@ class JSCCModel(nn.Module):
         else:
             perfect_flag=0
             fb_snr_broad=np.broadcast_to(fb_snr,(batch_size,1))
-        #perfect_flag=1
+  
         tcn=self.tcn
         feedback_for_encoder_all=torch.zeros(batch_size,64,(self.fb_num)*(self.last_iter-1)).cuda()
         latent_for_decoder_all=torch.zeros(batch_size,64,self.tcn*(self.last_iter)).cuda()
@@ -194,9 +195,7 @@ class JSCCModel(nn.Module):
         for step_id in range(self.iteration):
             if step_id!=(self.last_iter-1):
                 final_z_seq = self.encoder_2d(x,feedback_for_encoder_all)
-                #channel_out=self.transmit_feature(final_z_seq,snr)
-                #channel_out=self.channel(final_z_seq,snr)
-                channel_out=final_z_seq
+                channel_out=self.channel(final_z_seq,snr)
                 #fb + noise
                 if perfect_flag==1:
                     channel_fb_out=channel_out
@@ -208,9 +207,9 @@ class JSCCModel(nn.Module):
                 
             else:
                 final_z_seq = self.encoder_2d(x,feedback_for_encoder_all)
-                #channel_out=self.transmit_feature(final_z_seq,snr)
+                if (self.test_encoding_time_flag==1):
+                    return final_z_seq
                 channel_out=self.channel(final_z_seq,snr)
-                #channel_out=final_z_seq
                 latent_for_decoder_all[:,:,step_id*tcn:(step_id+1)*tcn]=channel_out
                 out=self.decoder_tran(latent_for_decoder_all)
                 x_out = rearrange(out, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", p1 = 4, p2 = 4, h = 8, w = 8, c =3)
