@@ -1,11 +1,9 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="0"
+#os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 GPU_ids = [0]
-#one_gpu_to_dual_gpu_flag=0
 #GPU_ids = [0,1]
-
 import torch 
-from Models.transformer_JSCC import JSCCModel
+from Models.JSCCformer import JSCCformerModel
 import torchvision
 import torch
 import torch.nn as nn 
@@ -13,6 +11,7 @@ from torchvision import datasets, transforms
 import matplotlib.pyplot as plt 
 import numpy as np
 import argparse
+from thop import profile
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -46,10 +45,11 @@ if __name__ == "__main__":
     parser.add_argument("--flag", default='train', type=str,help='train or eval for JSCC')
 
     # Model and Channel:
-    parser.add_argument("--model", default='SETR', type=str,help='Model select: SETR/ADSETR/')
-    parser.add_argument("--rate", default=48, type=int,help='rate:8,16,32')
-    parser.add_argument("--snr", default=10, type=int,help='awgn/slow fading/')
-    parser.add_argument("--fb_snr", default=10, type=int,help='awgn/slow fading/')
+    parser.add_argument("--model", default='JSCCformer', type=str,help='Model select: JSCCformer/ADJSCCformer/')
+    #parser.add_argument("--tcn", default=6, type=int,help='tansmit_channel_num for djscc')
+    #parser.add_argument("--channel_type", default='awgn', type=str,help='awgn/slow fading/burst')
+    #parser.add_argument("--snr", default=1, type=int,help='awgn/slow fading/')
+    parser.add_argument("--fb_snr", default=0, type=int,help='awgn/slow fading/')
     parser.add_argument("--refine", default=0,type=int, help='refine or not')
 
     parser.add_argument("--input_snr_max", default=20, type=float,help='SNR (db)')
@@ -59,21 +59,21 @@ if __name__ == "__main__":
     #check_dir('./checkpoints')
     check_dir('data')
 
-    if args.model=='SETR':
+    if args.model=='JSCCformer':
         #64*6 1/8 ->(4,4) tcn=6/iter
         #print("64*8 1/6 ->(4,4) tcn=8/2")
         #print("64*16 1/3 -> tcn=16/4")
 
         print('head: 8')
-        iter_num=1
-        tcn=args.rate//iter_num
+        iter_num=2
+        tcn=48//iter_num
         print('iter:', iter_num)
         print('64*',tcn*iter_num)
         print('refine_flag:',args.refine)
 
         #print("16*24 1/8->(8,8) tcn=24")
         
-        model = JSCCModel(patch_size=(4, 4), 
+        model = JSCCformerModel(patch_size=(4, 4), 
                         in_channels=3, 
                         out_channels=3, 
                         hidden_size=256, 
@@ -81,16 +81,17 @@ if __name__ == "__main__":
                         num_attention_heads=8, 
                         intermediate_size=1024,
                         tcn=tcn,iteration=iter_num)
-        channel_snr=args.snr
-        #channel_snr='random'
+        #channel_snr=args.snr
+        channel_snr='random'
         #channel_fb_snr=args.fb_snr
         channel_fb_snr='perfect'
 
     print('snr:',channel_snr)
     print('channel_fb_snr',channel_fb_snr)
     print(model)
+    print('channel_fb_snr',channel_fb_snr)
+
     print("############## Train model",args.model,",with SNR: ",channel_snr," ##############")
-    
     if len(GPU_ids)>1:
         model = nn.DataParallel(model,device_ids = GPU_ids)
     model = model.cuda()
@@ -113,7 +114,7 @@ if __name__ == "__main__":
                                              shuffle=False, num_workers=2)
 
 
-    optimizer = torch.optim.Adam(model.parameters(),lr=0.00005)
+    optimizer = torch.optim.Adam(model.parameters(),lr=0.0001)
     #optimizer = torch.optim.Adam(model.parameters())
 
     loss_func = nn.MSELoss()
@@ -122,17 +123,13 @@ if __name__ == "__main__":
 
     #for in_data, label in tqdm(data_loader_train, total=len(data_loader_train)):
     if args.resume==True:
-        model_path='./checkpoints_32/SNR_no_fb_tcn_48_snr_10.pth'
-        #model_path='./checkpoints_16/SETR_double_iter_4.pth'
+        model_path='./checkpoints_noise_fb/SNR_resume_fb_0_snr_random_2.pth'
+        #model_path='./checkpoints_16/JSCCformer_double_iter_4.pth'
         checkpoint=torch.load(model_path)
-        #single to multi_gpu
-        #if one_gpu_to_dual_gpu_flag==1:
-        #    model = model.module
-        #    model.load_state_dict(checkpoint["net"])
         epoch_last=checkpoint["epoch"]
         model.load_state_dict(checkpoint["net"])
 
-        #optimizer.load_state_dict(checkpoint["op"])
+        optimizer.load_state_dict(checkpoint["op"])
         best_psnr=checkpoint["Best_PSNR"]
         Trained_SNR=checkpoint['SNR']
 
@@ -151,6 +148,12 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             step += 1
             out= model(in_data,channel_snr,channel_fb_snr)
+            
+            #input = torch.randn(1, 3, 32, 32).cuda()
+            #flops, params = profile(model, (input,channel_snr,channel_fb_snr,))
+            #print('iter:',iter_num,'flops_2: ', flops, 'params: ', params)
+            #print('end')
+
             loss = loss_func(out, in_data)
             loss.backward()
             optimizer.step()
@@ -158,10 +161,10 @@ if __name__ == "__main__":
         print('Epoch:[',epoch,']',", loss : " ,str(report_loss/step))
 
         if (((epoch % 4 == 0) and (epoch>50)) or (epoch==0)):
-            if args.model=='SETR':
+            if args.model=='JSCCformer':
                 if channel_snr=='random':
                     PSNR_list=[]
-                    for i in [-2,1,4,7,10]:
+                    for i in [-2,1,4,7,10,13,14]:
                         validate_snr=i
                         val_ave_psnr=compute_AvePSNR(model,testloader,validate_snr,channel_fb_snr)
                         PSNR_list.append(val_ave_psnr)
@@ -178,11 +181,11 @@ if __name__ == "__main__":
                             "Best_PSNR":best_psnr
                         }
                         print(PSNR_list)
-                        SNR_rate_folder_path='./checkpoints_'+str(args.rate)
+                        SNR_rate_folder_path='./checkpoints_noise_fb/'
                         check_dir(SNR_rate_folder_path)      
-                        save_path=SNR_rate_folder_path+'SNR_double_8_no_fb_'+str(channel_fb_snr)+'_snr_'+str(channel_snr)+'_'+str(iter_num)+'.pth'  
+                        save_path=SNR_rate_folder_path+'SNR_resume_fb_'+str(channel_fb_snr)+'_snr_'+str(channel_snr)+'_'+str(iter_num)+'.pth'  
                         #check_dir(SNR_path)      
-                        #torch.save(checkpoint, save_path)
+                        torch.save(checkpoint, save_path)
                         print('Saving Model at epoch',epoch,'at',save_path)
                 else:
                     validate_snr=channel_snr
@@ -198,9 +201,9 @@ if __name__ == "__main__":
                             "SNR":channel_snr,
                             "Best_PSNR":best_psnr
                         }
-                        SNR_rate_folder_path='./checkpoints_32/'
+                        SNR_rate_folder_path='./checkpoints/'
                         check_dir(SNR_rate_folder_path)      
-                        save_path=SNR_rate_folder_path+'SNR_no_fb_tcn_'+str(tcn)+'_snr_'+str(channel_snr)+'.pth'  
+                        save_path=SNR_rate_folder_path+'SNR_no_fb_snr_'+str(channel_snr)+'.pth'  
                         #check_dir(SNR_path)      
-                        #torch.save(checkpoint, save_path)
+                        torch.save(checkpoint, save_path)
                         print('Saving Model at epoch',epoch,'at',save_path)       
