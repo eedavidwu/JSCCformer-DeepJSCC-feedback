@@ -61,7 +61,7 @@ if __name__ == "__main__":
 
     #print("16*24 1/8->(8,8) tcn=24")
     
-    model = SETRModel(patch_size=(4, 4), 
+    model = JSCCModel(patch_size=(4, 4), 
                     in_channels=3, 
                     out_channels=3, 
                     hidden_size=256, 
