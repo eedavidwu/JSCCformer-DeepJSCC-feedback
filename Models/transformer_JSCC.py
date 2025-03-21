@@ -45,50 +45,6 @@ class Channel(nn.Module):
         channel_out=out.view(in_shape).float()
         return channel_out
 
-class Fading_Channel(nn.Module):
-    def __init__(self, args):
-        super(Fading_Channel, self).__init__()
-
-    def compensation(self,inputs,h_broadcast):
-        h_norm_broadcast=torch.square(torch.abs(h_broadcast))
-        h_conj_broadcast=torch.conj(h_broadcast)
-        out=(h_conj_broadcast*inputs)/h_norm_broadcast
-        return out
-        
-    def forward(self, inputs,h,input_snr):
-        in_shape=inputs.shape
-        batch_size=in_shape[0]
-
-        ####Power constraint:
-        z_in=inputs.view(batch_size,-1)
-        sig_pwr=torch.square(torch.abs(z_in))
-        ave_sig_pwr=sig_pwr.mean(dim=1).unsqueeze(dim=1)
-        z_in_norm=z_in/(torch.sqrt(ave_sig_pwr))
-        inputs_in_norm=z_in_norm.view(in_shape)
-        ####Multipath Channel
-        complex_para_out=h*inputs_in_norm
-
-        ##awgn:
-        noise_stddev=(np.sqrt(10**(-input_snr/10))/np.sqrt(2)).reshape(-1,1,1)
-        noise_stddev_board=torch.from_numpy(noise_stddev).repeat(1,in_shape[1],in_shape[2]).cuda()
-        mean=torch.zeros_like(noise_stddev_board).cuda()
-        
-        #compute ave:
-        noise_real=Variable(torch.normal(mean=mean,std=noise_stddev_board).cuda())
-        noise_img=Variable(torch.normal(mean=mean,std=noise_stddev_board).cuda())
-        noise_complex=torch.complex(noise_real,noise_img)
-        
-        ##y=hx+w
-        channel_out=complex_para_out+noise_complex
-
-        #compensation:
-        channel_com_out=self.compensation(channel_out,h)
-
-        #new_noise=self.compensation(noise_complex,h_broadcast)
-        #new_out=inputs_in_norm+new_noise
-
-        return channel_com_out#,inputs_in_norm
-
 class Encoder2D(nn.Module):
     def __init__(self, config: TransConfig, tcn,iteration):
         super().__init__()
@@ -98,6 +54,7 @@ class Encoder2D(nn.Module):
         sample_rate = config.sample_rate
         sample_v = int(math.pow(2, sample_rate))
         #sample_rate=4,sample_v=16
+        assert config.patch_size[0] * config.patch_size[1] * config.hidden_size % (sample_v**2) == 0, "不能除尽"
         self.final_dense = nn.Linear(config.hidden_size,  tcn)
         #self.final_dense=Siam_linear(config,config.hidden_size, tcn)
         ##linear:x hidden-> 8*8*hidden/16/16
@@ -109,17 +66,23 @@ class Encoder2D(nn.Module):
     def forward(self, x,feedback):
         ## x:(b, c, w, h)
         b, c, h, w = x.shape
+        #assert self.config.in_channels == c, "in_channels != 输入图像channel"
         p1 = self.patch_size[0]
         p2 = self.patch_size[1]
 
-       
+        if h % p1 != 0:
+            print("请重新输入img size 参数 必须整除")
+            os._exit(0)
+        if w % p2 != 0:
+            print("请重新输入img size 参数 必须整除")
+            os._exit(0)
         hh = h // p1 
         ww = w // p2 
 
         x = rearrange(x, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = p1, p2 = p2,h = hh, w = ww)
         x_in=torch.cat((x,feedback),dim=2)
         
-        encode_x = self.bert_model(x_in)[-1]
+        encode_x = self.bert_model(x_in)[-1] # 取出来最后一层
         x_sequence = self.final_dense(encode_x)
         #x = rearrange(x_f, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", p1 = self.hh, p2 = self.ww, h = hh, w = ww, c =tcn)
         #x_map = rearrange(x_sequence, "b (h w) (c) -> b c (h) (w)", h = hh, w = ww, c =self.tcn)
@@ -142,7 +105,7 @@ class Decoder2D_trans(nn.Module):
 
     def forward(self, x):
         ## x:(b, path_num, c)
-        encode_x = self.bert_model(x)[-1] 
+        encode_x = self.bert_model(x)[-1] # 取出来最后一层
         #x = torch.sigmoid(self.final_dense(encode_x))   
         x = self.final_dense(encode_x)      
         #x_out = rearrange(x, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", p1 = 8, p2 = 8, h = 4, w = 4, c =3)
@@ -206,7 +169,10 @@ class JSCCModel(nn.Module):
 
     def transmit_feature(self,feature,channel_snr):
         #feature_ave=torch.zeros_like(feature).float().cuda()
+        #for i in range (1):
         channel_out=self.channel(feature,channel_snr)
+        #feature_ave=feature_ave+channel_out
+        #feature_out=feature_ave/1
         return channel_out
 
     def forward(self, x,input_snr,fb_snr):
@@ -215,17 +181,38 @@ class JSCCModel(nn.Module):
             snr=np.random.rand(batch_size,)*(10+2)-2
         else:
             snr=np.broadcast_to(input_snr,(batch_size,1))
+        if fb_snr=='perfect':
+            perfect_flag=1
+        else:
+            perfect_flag=0
+            fb_snr_broad=np.broadcast_to(fb_snr,(batch_size,1))
+        #perfect_flag=1
         tcn=self.tcn
         feedback_for_encoder_all=torch.zeros(batch_size,64,(self.fb_num)*(self.last_iter-1)).cuda()
         latent_for_decoder_all=torch.zeros(batch_size,64,self.tcn*(self.last_iter)).cuda()
-        #latent_for_decoder_fb=torch.zeros(batch_size,64,self.tcn*(self.last_iter)).cuda()
-        
-        final_z_seq = self.encoder_2d(x,feedback_for_encoder_all)
-        #channel_out=self.transmit_feature(final_z_seq,snr)
-        channel_out=self.channel(final_z_seq,snr)
-        #channel_out=final_z_seq
-        latent_for_decoder_all[:,:,0*tcn:(0+1)*tcn]=channel_out
-        out=self.decoder_tran(latent_for_decoder_all)
-        x_out = rearrange(out, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", p1 = 4, p2 = 4, h = 8, w = 8, c =3)
-        return x_out
+        latent_for_decoder_fb=torch.zeros(batch_size,64,self.tcn*(self.last_iter)).cuda()
+        for step_id in range(self.iteration):
+            if step_id!=(self.last_iter-1):
+                final_z_seq = self.encoder_2d(x,feedback_for_encoder_all)
+                #channel_out=self.transmit_feature(final_z_seq,snr)
+                #channel_out=self.channel(final_z_seq,snr)
+                channel_out=final_z_seq
+                #fb + noise
+                if perfect_flag==1:
+                    channel_fb_out=channel_out
+                else:
+                    channel_fb_out=self.transmit_feature(channel_out,fb_snr_broad)
+                latent_for_decoder_all[:,:,step_id*tcn:(step_id+1)*tcn]=channel_out
+                feedback_for_next_iter=channel_fb_out
+                feedback_for_encoder_all[:,:,step_id*self.fb_num:(step_id+1)*self.fb_num]=feedback_for_next_iter
+                
+            else:
+                final_z_seq = self.encoder_2d(x,feedback_for_encoder_all)
+                #channel_out=self.transmit_feature(final_z_seq,snr)
+                channel_out=self.channel(final_z_seq,snr)
+                #channel_out=final_z_seq
+                latent_for_decoder_all[:,:,step_id*tcn:(step_id+1)*tcn]=channel_out
+                out=self.decoder_tran(latent_for_decoder_all)
+                x_out = rearrange(out, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", p1 = 4, p2 = 4, h = 8, w = 8, c =3)
+                return x_out
 
